@@ -8,6 +8,7 @@ from frappe.model.document import Document
 from frappe.utils import comma_and, date_diff, flt, fmt_money, formatdate, get_link_to_form, getdate
 
 from hrms.hr.utils import validate_active_employee
+from hrms.payroll.utils import PARENTFIELD_TO_COMPONENT_TYPE
 
 
 class AdditionalSalary(Document):
@@ -26,6 +27,7 @@ class AdditionalSalary(Document):
 
 	def validate(self):
 		validate_active_employee(self.employee)
+		self.validate_employer_contribution()
 		self.validate_dates()
 		self.validate_salary_structure()
 		self.validate_recurring_additional_salary_overlap()
@@ -229,6 +231,24 @@ class AdditionalSalary(Document):
 				indicator="orange",
 			)
 
+	def validate_employer_contribution(self):
+		if self.type != "Employer Contribution":
+			return
+
+		# employer cost never reaches the employee, so there is no tax to deduct
+		self.deduct_full_tax_on_selected_payroll_date = 0
+
+		if self.ref_doctype in (
+			"Employee Referral",
+			"Employee Advance",
+			"Employee Benefit Claim",
+			"Arrear",
+			"Payroll Correction",
+		):
+			frappe.throw(
+				_("{0} cannot be linked to an Employer Contribution component").format(_(self.ref_doctype))
+			)
+
 	def validate_employee_advance_return(self):
 		if self.ref_doctype != "Employee Advance" or not self.ref_docname:
 			return
@@ -302,7 +322,7 @@ class AdditionalSalary(Document):
 def get_additional_salaries(employee, start_date, end_date, component_type):
 	from frappe.query_builder import Criterion
 
-	comp_type = "Earning" if component_type == "earnings" else "Deduction"
+	comp_type = PARENTFIELD_TO_COMPONENT_TYPE[component_type]
 
 	additional_sal = frappe.qb.DocType("Additional Salary")
 	component_field = additional_sal.salary_component.as_("component")

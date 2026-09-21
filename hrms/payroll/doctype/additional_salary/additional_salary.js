@@ -23,6 +23,27 @@ frappe.ui.form.on("Additional Salary", {
 		frm.trigger("set_component_query");
 	},
 
+	refresh: function (frm) {
+		frm.trigger("set_employer_contribution_intro");
+	},
+
+	type: function (frm) {
+		frm.trigger("set_employer_contribution_intro");
+	},
+
+	set_employer_contribution_intro: function (frm) {
+		if (frm.doc.type == "Employer Contribution") {
+			frm.set_intro(
+				__(
+					"Employer contribution: shown on the salary slip as employer cost, not paid to the employee.",
+				),
+				"blue",
+			);
+		} else {
+			frm.set_intro("");
+		}
+	},
+
 	employee: function (frm) {
 		if (frm.doc.employee) {
 			frappe.run_serially([

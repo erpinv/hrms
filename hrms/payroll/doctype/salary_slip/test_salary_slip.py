@@ -3343,13 +3343,20 @@ class TestSalarySlipEmployerContributions(HRMSTestSuite):
 			0,
 		),
 	)
+	# only applied through Additional Salary, never part of the structure
+	ADDITIONAL_COMPONENTS = (
+		("Test Slip Employer Bonus", "TSEB", {}, 0),
+		("Test Slip Employer Insurance", "TSEI", {}, 0),
+	)
 
 	def setUp(self):
 		make_payroll_period(company="_Test Company")
 		frappe.db.set_single_value("Payroll Settings", "email_salary_slip_to_employee", 0)
 		frappe.flags.pop("via_payroll_entry", None)
 
-		for component, abbr, _details, depends_on_payment_days in self.COMPONENTS:
+		for component, abbr, _details, depends_on_payment_days in (
+			self.COMPONENTS + self.ADDITIONAL_COMPONENTS
+		):
 			if frappe.db.exists("Salary Component", component):
 				frappe.delete_doc("Salary Component", component, force=True)
 			frappe.get_doc(
@@ -3449,6 +3456,87 @@ class TestSalarySlipEmployerContributions(HRMSTestSuite):
 		self.assertEqual(len(slip.employer_contributions), 2)
 
 		additional_salary.cancel()
+
+	def make_employer_additional_salary(self, employee, component, amount, **details):
+		return frappe.get_doc(
+			{
+				"doctype": "Additional Salary",
+				"employee": employee,
+				"company": "_Test Company",
+				"salary_component": component,
+				"type": "Employer Contribution",
+				"amount": amount,
+				"currency": "INR",
+				"payroll_date": nowdate(),
+				"overwrite_salary_structure_amount": 0,
+				**details,
+			}
+		).submit()
+
+	def test_additional_salary_employer_contribution(self):
+		employee = make_employee("ec_employer_additional@salary.com", company="_Test Company")
+		structure = self.make_structure("Salary Structure EC Employer Additional", employee)
+
+		baseline = make_salary_slip(structure.name, employee=employee)
+		totals = ("gross_pay", "total_deduction", "net_pay", "rounded_total")
+		baseline_totals = {field: flt(baseline.get(field), 2) for field in totals}
+		baseline_nps = next(d.amount for d in baseline.employer_contributions if d.abbr == "TSENPS")
+
+		one_off = self.make_employer_additional_salary(employee, "Test Slip Employer Bonus", 1500)
+		recurring = self.make_employer_additional_salary(
+			employee,
+			"Test Slip Employer Insurance",
+			2000,
+			is_recurring=1,
+			payroll_date=None,
+			from_date=get_first_day(nowdate()),
+			to_date=add_months(get_last_day(nowdate()), 6),
+		)
+		overwrite = self.make_employer_additional_salary(
+			employee, "Test Slip Employer PF", 7500, overwrite_salary_structure_amount=1
+		)
+
+		slip = make_salary_slip(structure.name, employee=employee)
+		rows = {}
+		for d in slip.employer_contributions:
+			rows.setdefault(d.salary_component, []).append(d)
+
+		self.assertEqual(len(slip.employer_contributions), 4)
+
+		bonus = rows["Test Slip Employer Bonus"][0]
+		self.assertEqual(bonus.amount, 1500)
+		self.assertEqual(bonus.additional_salary, one_off.name)
+		self.assertFalse(bonus.is_recurring_additional_salary)
+
+		insurance = rows["Test Slip Employer Insurance"][0]
+		self.assertEqual(insurance.amount, 2000)
+		self.assertEqual(insurance.additional_salary, recurring.name)
+		self.assertTrue(insurance.is_recurring_additional_salary)
+
+		# overwrite replaces the structure row instead of adding a second one
+		self.assertEqual(len(rows["Test Slip Employer PF"]), 1)
+		pf = rows["Test Slip Employer PF"][0]
+		self.assertEqual(pf.amount, 7500)
+		self.assertEqual(pf.additional_salary, overwrite.name)
+
+		self.assertEqual(rows["Test Slip Employer NPS"][0].amount, baseline_nps)
+
+		# employer additional salaries never reach the employee's pay
+		for table in ("earnings", "deductions"):
+			components = [d.salary_component for d in slip.get(table)]
+			self.assertNotIn("Test Slip Employer Bonus", components)
+			self.assertNotIn("Test Slip Employer Insurance", components)
+			self.assertNotIn("Test Slip Employer PF", components)
+
+		for field in totals:
+			self.assertEqual(
+				flt(slip.get(field), 2),
+				baseline_totals[field],
+				msg=f"{field} changed because of employer additional salary",
+			)
+
+		for additional_salary in (one_off, recurring, overwrite):
+			additional_salary.cancel()
 
 	def test_employer_contributions_not_printed(self):
 		"""Employer cost stays on the record, not on the employee's payslip."""

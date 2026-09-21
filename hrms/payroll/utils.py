@@ -41,6 +41,8 @@ COMPONENT_TYPE_TO_PARENTFIELD = {
 	"Employer Contribution": "employer_contributions",
 }
 
+PARENTFIELD_TO_COMPONENT_TYPE = {v: k for k, v in COMPONENT_TYPE_TO_PARENTFIELD.items()}
+
 
 COMPONENT_EVAL_GLOBALS = {
 	"int": int,

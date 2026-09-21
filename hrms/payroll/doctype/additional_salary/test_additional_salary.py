@@ -186,6 +186,49 @@ class TestAdditionalSalary(HRMSTestSuite):
 		with self.assertRaises(frappe.ValidationError):
 			additional_salary_doc.save()
 
+	def test_employer_contribution_additional_salary(self):
+		emp_id = make_employee("test_additional@salary.com", company="_Test Company")
+		make_salary_structure(
+			"Test Salary Structure Additional Salary",
+			"Monthly",
+			employee=emp_id,
+			from_date=add_days(nowdate(), -50),
+			company="_Test Company",
+		)
+		create_salary_component("Test Additional Employer PF", type="Employer Contribution")
+
+		def make_doc(**details):
+			return frappe.get_doc(
+				{
+					"doctype": "Additional Salary",
+					"employee": emp_id,
+					"company": "_Test Company",
+					"salary_component": "Test Additional Employer PF",
+					"payroll_date": nowdate(),
+					"amount": 1000,
+					"currency": "INR",
+					**details,
+				}
+			)
+
+		# employer cost is never taxed in the employee's hands
+		additional_salary = make_doc(deduct_full_tax_on_selected_payroll_date=1).insert()
+		self.assertEqual(additional_salary.type, "Employer Contribution")
+		self.assertEqual(additional_salary.deduct_full_tax_on_selected_payroll_date, 0)
+
+		for ref_doctype in (
+			"Employee Referral",
+			"Employee Advance",
+			"Employee Benefit Claim",
+			"Arrear",
+			"Payroll Correction",
+		):
+			self.assertRaisesRegex(
+				frappe.ValidationError,
+				"cannot be linked to an Employer Contribution component",
+				make_doc(ref_doctype=ref_doctype).insert,
+			)
+
 
 def get_additional_salary(
 	emp_id, recurring=True, payroll_date=None, salary_component=None, overwrite_salary_structure=0

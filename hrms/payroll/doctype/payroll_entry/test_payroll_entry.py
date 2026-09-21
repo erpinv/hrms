@@ -1104,6 +1104,22 @@ class TestPayrollEntry(HRMSTestSuite):
 		)
 
 		dates = get_start_end_dates("Monthly", nowdate())
+
+		# one-off employer contribution on top of the structure amount
+		additional_salary = frappe.get_doc(
+			{
+				"doctype": "Additional Salary",
+				"employee": employee,
+				"company": company.name,
+				"salary_component": employer_pf.name,
+				"type": "Employer Contribution",
+				"amount": 1200,
+				"currency": company.default_currency,
+				"payroll_date": dates.start_date,
+				"overwrite_salary_structure_amount": 0,
+			}
+		).submit()
+
 		payroll_entry = make_payroll_entry(
 			start_date=dates.start_date,
 			end_date=dates.end_date,
@@ -1122,14 +1138,14 @@ class TestPayrollEntry(HRMSTestSuite):
 		self.assertTrue(employer_contribution_je, "Employer contribution Journal Entry not created")
 
 		je_doc = frappe.get_doc("Journal Entry", employer_contribution_je)
-		self.assertEqual(je_doc.total_debit, 5000)
-		self.assertEqual(je_doc.total_credit, 5000)
+		self.assertEqual(je_doc.total_debit, 6200)
+		self.assertEqual(je_doc.total_credit, 6200)
 
 		debit_row = next(d for d in je_doc.accounts if d.account == expense_account)
-		self.assertEqual(debit_row.debit, 5000)
+		self.assertEqual(debit_row.debit, 6200)
 
 		credit_row = next(d for d in je_doc.accounts if d.account == liability_account)
-		self.assertEqual(credit_row.credit, 5000)
+		self.assertEqual(credit_row.credit, 6200)
 		self.assertEqual(credit_row.reference_type, "Payroll Entry")
 		self.assertFalse(credit_row.party)
 
@@ -1147,6 +1163,8 @@ class TestPayrollEntry(HRMSTestSuite):
 		payroll_entry.reload()
 		payroll_entry.cancel()
 		self.assertEqual(frappe.db.get_value("Journal Entry", employer_contribution_je, "docstatus"), 2)
+
+		additional_salary.cancel()
 
 	@HRMSTestSuite.change_settings(
 		"Payroll Settings", {"process_payroll_accounting_entry_based_on_employee": 1}

@@ -1164,12 +1164,12 @@ class SalarySlip(TransactionBase):
 			self._set_evaluated_components()
 
 		self.add_structure_components(component_type)
+		self.add_additional_salary_components(component_type)
 
 		if component_type == "employer_contributions":
-			# additional salary, tax and flexi benefits are earning/deduction only
+			# tax and flexi benefits are earning/deduction only
 			return
 
-		self.add_additional_salary_components(component_type)
 		if component_type == "earnings":
 			self.add_employee_benefits()
 		else:
