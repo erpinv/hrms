@@ -254,6 +254,11 @@ class SalarySlip(TransactionBase):
 			after_commit=True,
 		)
 
+	def before_print(self, settings=None):
+		# employer cost is not part of the employee's pay: keep it off the payslip unless enabled
+		if not frappe.db.get_single_value("Payroll Settings", "show_employer_contributions_in_salary_slip"):
+			self.set("employer_contributions", [])
+
 	def on_trash(self):
 		from frappe.model.naming import revert_series_if_last
 

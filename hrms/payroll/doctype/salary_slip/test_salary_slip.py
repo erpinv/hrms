@@ -3549,6 +3549,20 @@ class TestSalarySlipEmployerContributions(HRMSTestSuite):
 		self.assertNotIn("Test Slip Employer PF", html)
 		self.assertNotIn("Test Slip Employer NPS", html)
 
+	@HRMSTestSuite.change_settings("Payroll Settings", {"show_employer_contributions_in_salary_slip": 1})
+	def test_employer_contributions_printed_when_enabled(self):
+		slip = self.make_slip("Salary Structure EC Print Enabled", "ec_print_enabled@salary.com")
+		slip.insert()
+
+		html = frappe.get_print("Salary Slip", slip.name, print_format="Salary Slip Standard")
+		self.assertIn('data-fieldname="employer_contributions"', html)
+		self.assertIn("Test Slip Employer PF", html)
+		self.assertIn("Test Slip Employer NPS", html)
+
+		# printing must not touch the stored rows
+		slip.reload()
+		self.assertEqual(len(slip.employer_contributions), 2)
+
 	def test_employer_contributions_reset_on_reload(self):
 		slip = self.make_slip("Salary Structure EC Reload", "ec_reload@salary.com")
 		self.assertEqual(len(slip.employer_contributions), 2)
