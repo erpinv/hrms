@@ -90,6 +90,38 @@ class TestSalaryComponent(HRMSTestSuite):
 		for flag in EMPLOYER_CONTRIBUTION_CLEARED_FLAGS:
 			self.assertEqual(doc.get(flag), 0, msg=f"{flag} not cleared")
 
+	def test_employee_share_component_pairing(self):
+		for component in ("Test EC Pairing PF", "Test EC Pairing Employee PF", "Test EC Pairing Earning"):
+			if frappe.db.exists("Salary Component", component):
+				frappe.delete_doc("Salary Component", component, force=True)
+
+		create_salary_component("Test EC Pairing Employee PF", type="Deduction")
+		create_salary_component("Test EC Pairing Earning", type="Earning")
+
+		employer_pf = frappe.get_doc(
+			{
+				"doctype": "Salary Component",
+				"salary_component": "Test EC Pairing PF",
+				"salary_component_abbr": "TECPPF",
+				"type": "Employer Contribution",
+				"employee_share_component": "Test EC Pairing Earning",
+			}
+		)
+		self.assertRaisesRegex(frappe.ValidationError, "must be a Deduction component", employer_pf.insert)
+
+		employer_pf.employee_share_component = "Test EC Pairing Employee PF"
+		employer_pf.insert()
+		self.assertEqual(employer_pf.employee_share_component, "Test EC Pairing Employee PF")
+
+		employer_pf.employee_share_component = employer_pf.name
+		self.assertRaisesRegex(frappe.ValidationError, "cannot be the component itself", employer_pf.save)
+
+		# the pairing only means something for employer contributions
+		deduction = frappe.get_doc("Salary Component", "Test EC Pairing Employee PF")
+		deduction.employee_share_component = "Test EC Pairing Employee PF"
+		deduction.save()
+		self.assertFalse(deduction.employee_share_component)
+
 
 def create_salary_component(component_name, **args):
 	if frappe.db.exists("Salary Component", component_name):

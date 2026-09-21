@@ -13,6 +13,7 @@
   "salary_component",
   "salary_component_abbr",
   "type",
+  "employee_share_component",
   "description",
   "column_break_4",
   "depends_on_payment_days",
@@ -110,6 +111,14 @@
    "fieldname": "disabled",
    "fieldtype": "Check",
    "label": "Disabled"
+  },
+  {
+   "depends_on": "eval:doc.type == \"Employer Contribution\"",
+   "description": "Deduction component carrying the employee's share of the same fund; used to show and remit both shares together",
+   "fieldname": "employee_share_component",
+   "fieldtype": "Link",
+   "label": "Employee Share Component",
+   "options": "Salary Component"
   },
   {
    "fieldname": "description",
@@ -295,7 +304,7 @@
  "icon": "fa fa-flag",
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-09-15 12:00:00.000000",
+ "modified": "2026-09-21 16:14:52.414804",
  "modified_by": "Administrator",
  "module": "Payroll",
  "name": "Salary Component",

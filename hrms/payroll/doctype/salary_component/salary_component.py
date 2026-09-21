@@ -76,10 +76,13 @@ class SalaryComponent(Document):
 
 	def validate_employer_contribution(self):
 		if self.type != "Employer Contribution":
+			self.employee_share_component = None
 			return
 
 		for flag in EMPLOYER_CONTRIBUTION_CLEARED_FLAGS:
 			self.set(flag, 0)
+
+		self.validate_employee_share_component()
 
 		for row in self.accounts:
 			if not row.account:
@@ -91,6 +94,20 @@ class SalaryComponent(Document):
 					)
 				)
 			self.warn_on_unexpected_root_type(row)
+
+	def validate_employee_share_component(self):
+		if not self.employee_share_component:
+			return
+		if self.employee_share_component == self.name:
+			frappe.throw(_("Employee Share Component cannot be the component itself"))
+
+		share_type = frappe.db.get_value("Salary Component", self.employee_share_component, "type")
+		if share_type != "Deduction":
+			frappe.throw(
+				_("Employee Share Component {0} must be a Deduction component").format(
+					frappe.bold(self.employee_share_component)
+				)
+			)
 
 	def warn_on_unexpected_root_type(self, row):
 		for fieldname, expected in (("account", "Expense"), ("liability_account", "Liability")):

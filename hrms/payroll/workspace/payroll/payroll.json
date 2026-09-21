@@ -108,7 +108,7 @@
    "hidden": 0,
    "is_query_report": 0,
    "label": "Payroll Reports",
-   "link_count": 5,
+   "link_count": 6,
    "onboard": 0,
    "type": "Card Break"
   },
@@ -118,6 +118,16 @@
    "label": "Salary Register",
    "link_count": 0,
    "link_to": "Salary Register",
+   "link_type": "Report",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 1,
+   "label": "Employer Contribution Register",
+   "link_count": 0,
+   "link_to": "Employer Contribution Register",
    "link_type": "Report",
    "onboard": 0,
    "type": "Link"
@@ -376,7 +386,7 @@
    "type": "Link"
   }
  ],
- "modified": "2026-01-09 17:59:39.577284",
+ "modified": "2026-09-21 16:14:52.436220",
  "modified_by": "Administrator",
  "module": "Payroll",
  "name": "Payroll",

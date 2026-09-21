@@ -28,6 +28,14 @@ frappe.ui.form.on("Salary Component", {
 				},
 			};
 		});
+		frm.set_query("employee_share_component", function () {
+			return {
+				filters: {
+					type: "Deduction",
+					disabled: 0,
+				},
+			};
+		});
 		frm.set_query("earning_component_group", function () {
 			return {
 				filters: {
