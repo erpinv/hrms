@@ -12,7 +12,11 @@ from frappe.utils import cint, cstr, flt, get_link_to_form
 
 import erpnext
 
-from hrms.payroll.utils import COMPONENT_PARENTFIELDS, sanitize_expression
+from hrms.payroll.utils import (
+	COMPONENT_PARENTFIELDS,
+	PARENTFIELD_TO_COMPONENT_TYPE,
+	sanitize_expression,
+)
 
 
 class SalaryStructure(Document):
@@ -24,6 +28,7 @@ class SalaryStructure(Document):
 
 	def validate(self):
 		self.set_missing_values()
+		self.validate_component_types()
 		self.validate_amount()
 		self.validate_component_based_on_tax_slab()
 		self.validate_payment_days_based_dependent_component()
@@ -79,6 +84,38 @@ class SalaryStructure(Document):
 					if not (d.get("amount") or d.get("formula")):
 						for fieldname in overwritten_fields_if_missing:
 							d.set(fieldname, component_default_value.get(fieldname))
+
+	def validate_component_types(self):
+		"""Each table only accepts components of its own type (Earning, Deduction, Employer Contribution)."""
+		components = {d.salary_component for f in PARENTFIELD_TO_COMPONENT_TYPE for d in self.get(f) or []}
+		if not components:
+			return
+
+		types = dict(
+			frappe.get_all(
+				"Salary Component",
+				filters={"name": ["in", list(components)]},
+				fields=["name", "type"],
+				as_list=True,
+			)
+		)
+
+		mismatches = []
+		for parentfield, expected in PARENTFIELD_TO_COMPONENT_TYPE.items():
+			for d in self.get(parentfield) or []:
+				actual = types.get(d.salary_component)
+				if actual and actual != expected:
+					mismatches.append(
+						_("Row {0} in {1}: {2} is a {3} component").format(
+							d.idx,
+							_(self.meta.get_label(parentfield)),
+							frappe.bold(d.salary_component),
+							_(actual),
+						)
+					)
+
+		if mismatches:
+			frappe.throw("<br>".join(mismatches), title=_("Salary Component type mismatch"))
 
 	def validate_component_based_on_tax_slab(self):
 		for row in self.deductions:

@@ -56,6 +56,40 @@ class TestSalaryComponent(HRMSTestSuite):
 		ss3_detail.reload()
 		self.assertEqual(ss3_detail.formula, OLD_FORMULA)
 
+	def test_employer_contribution_component(self):
+		from hrms.payroll.doctype.salary_component.salary_component import (
+			EMPLOYER_CONTRIBUTION_CLEARED_FLAGS,
+		)
+		from hrms.payroll.doctype.salary_slip.test_salary_slip import create_account
+
+		create_account("Test EC Expense", "_Test Company", "Indirect Expenses - _TC")
+		create_account("Test EC Payable", "_Test Company", "Current Liabilities - _TC")
+
+		component = "Test EC Validation PF"
+		if frappe.db.exists("Salary Component", component):
+			frappe.delete_doc("Salary Component", component, force=True)
+
+		doc = frappe.get_doc(
+			{
+				"doctype": "Salary Component",
+				"salary_component": component,
+				"salary_component_abbr": "TECVPF",
+				"type": "Employer Contribution",
+				# every flag that only makes sense for employee pay or tax
+				**{flag: 1 for flag in EMPLOYER_CONTRIBUTION_CLEARED_FLAGS},
+				"accounts": [{"company": "_Test Company", "account": "Test EC Expense - _TC"}],
+			}
+		)
+
+		# an expense account without its liability counterpart cannot be journaled
+		self.assertRaisesRegex(frappe.ValidationError, "Liability Account is required", doc.insert)
+
+		doc.accounts[0].liability_account = "Test EC Payable - _TC"
+		doc.insert()
+
+		for flag in EMPLOYER_CONTRIBUTION_CLEARED_FLAGS:
+			self.assertEqual(doc.get(flag), 0, msg=f"{flag} not cleared")
+
 
 def create_salary_component(component_name, **args):
 	if frappe.db.exists("Salary Component", component_name):

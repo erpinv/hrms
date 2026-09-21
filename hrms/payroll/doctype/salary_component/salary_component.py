@@ -10,6 +10,19 @@ from frappe.model.naming import append_number_if_name_exists
 
 from hrms.payroll.utils import COMPONENT_TYPE_TO_PARENTFIELD, sanitize_expression
 
+# employee-pay and tax semantics that have no meaning for employer cost
+EMPLOYER_CONTRIBUTION_CLEARED_FLAGS = (
+	"statistical_component",
+	"is_flexible_benefit",
+	"do_not_include_in_total",
+	"arrear_component",
+	"remove_if_zero_valued",
+	"variable_based_on_taxable_salary",
+	"deduct_full_tax_on_selected_payroll_date",
+	"exempted_from_income_tax",
+	"is_tax_applicable",
+)
+
 
 class SalaryComponent(Document):
 	def before_validate(self):
@@ -18,6 +31,7 @@ class SalaryComponent(Document):
 
 	def validate(self):
 		self.validate_abbr()
+		self.validate_employer_contribution()
 		self.validate_accounts()
 		self.validate_accrual_component()
 		self.valide_arrear_component()
@@ -59,6 +73,41 @@ class SalaryComponent(Document):
 				msg=_("Accounts not set for Salary Component {0}").format(self.name),
 				indicator="orange",
 			)
+
+	def validate_employer_contribution(self):
+		if self.type != "Employer Contribution":
+			return
+
+		for flag in EMPLOYER_CONTRIBUTION_CLEARED_FLAGS:
+			self.set(flag, 0)
+
+		for row in self.accounts:
+			if not row.account:
+				continue
+			if not row.liability_account:
+				frappe.throw(
+					_("Row {0}: Liability Account is required for Employer Contribution components").format(
+						row.idx
+					)
+				)
+			self.warn_on_unexpected_root_type(row)
+
+	def warn_on_unexpected_root_type(self, row):
+		for fieldname, expected in (("account", "Expense"), ("liability_account", "Liability")):
+			account = row.get(fieldname)
+			root_type = frappe.db.get_value("Account", account, "root_type")
+			if root_type and root_type != expected:
+				frappe.msgprint(
+					_("Row {0}: {1} is a {2} account, expected {3} for {4}").format(
+						row.idx,
+						frappe.bold(account),
+						_(root_type),
+						_(expected),
+						_(row.meta.get_label(fieldname)),
+					),
+					title=_("Warning"),
+					indicator="orange",
+				)
 
 	def validate_accrual_component(self):
 		if self.type != "Earning" and self.accrual_component:

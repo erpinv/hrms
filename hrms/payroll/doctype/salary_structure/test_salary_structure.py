@@ -160,6 +160,60 @@ class TestSalaryStructure(HRMSTestSuite):
 		self.assertEqual(row.depends_on_payment_days, 0)
 		self.assertEqual(row.amount, 6000)
 
+	def test_component_type_must_match_table(self):
+		component = "Test Structure Type Check EPF"
+		if frappe.db.exists("Salary Component", component):
+			frappe.delete_doc("Salary Component", component, force=True)
+		frappe.get_doc(
+			{
+				"doctype": "Salary Component",
+				"salary_component": component,
+				"salary_component_abbr": "TSTCEPF",
+				"type": "Employer Contribution",
+				"amount": 1000,
+			}
+		).insert()
+
+		# employer component under earnings
+		self.assertRaisesRegex(
+			frappe.ValidationError,
+			"is a Employer Contribution component",
+			make_salary_structure,
+			"Salary Structure Type Mismatch Earnings",
+			"Monthly",
+			company="_Test Company",
+			currency="INR",
+			earnings=[{"salary_component": component, "abbr": "TSTCEPF", "amount": 1000}],
+		)
+
+		# deduction component under employer contributions
+		self.assertRaisesRegex(
+			frappe.ValidationError,
+			"is a Deduction component",
+			make_salary_structure,
+			"Salary Structure Type Mismatch Employer",
+			"Monthly",
+			company="_Test Company",
+			currency="INR",
+			other_details={
+				"employer_contributions": [
+					{"salary_component": "Professional Tax", "abbr": "PT", "amount": 200}
+				]
+			},
+		)
+
+		# correctly placed rows still save
+		sal_struct = make_salary_structure(
+			"Salary Structure Type Match",
+			"Monthly",
+			company="_Test Company",
+			currency="INR",
+			other_details={
+				"employer_contributions": [{"salary_component": component, "abbr": "TSTCEPF", "amount": 1000}]
+			},
+		)
+		self.assertEqual(sal_struct.docstatus, 1)
+
 
 def make_salary_structure(
 	salary_structure,
