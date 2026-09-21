@@ -10,4 +10,5 @@ an upstream release contains it.
 | 2 | `23a5037ae` | fix: Salary Register crashes on employer contribution rows | pending (forward-port to `develop`) |
 | 3 | `5a29b33b2` | feat: Additional Salary of type Employer Contribution applied to the slip's employer table | pending (forward-port to `develop`) |
 | 4 | `f95bdb981` | feat: validate component types per Salary Structure table; employer components need a liability account and drop employee-pay/tax flags | pending (forward-port to `develop`) |
-| 5 | — | feat: Employer Contribution Register report; `employee_share_component` pairing on Salary Component | pending (forward-port to `develop`) |
+| 5 | `b3f0ad1a3` | feat: Employer Contribution Register report; `employee_share_component` pairing on Salary Component | pending (forward-port to `develop`) |
+| 6 | — | feat: pay employer contributions from Payroll Entry (`employer_contribution_status` / `employer_contribution_payment_entry`) | pending (forward-port to `develop`) |

@@ -179,6 +179,14 @@ frappe.ui.form.on("Payroll Entry", {
 	},
 
 	add_bank_entry_button: function (frm) {
+		if (frm.doc.employer_contribution_status === "Pending") {
+			frm.add_custom_button(
+				__("Pay Employer Contributions"),
+				() => pay_employer_contributions(frm),
+				__("Make"),
+			);
+		}
+
 		frm.call("has_bank_entries").then((r) => {
 			if (!r.message.has_bank_entries) {
 				frm.add_custom_button(__("Make Bank Entry"), function () {
@@ -461,6 +469,69 @@ let make_bank_entry = function (frm, for_withheld_salaries = 0) {
 		frappe.msgprint(__("Payment Account is mandatory"));
 		frm.scroll_to_field("payment_account");
 	}
+};
+
+let pay_employer_contributions = function (frm) {
+	const dialog = new frappe.ui.Dialog({
+		title: __("Pay Employer Contributions"),
+		fields: [
+			{
+				fieldname: "bank_account",
+				label: __("Bank / Cash Account"),
+				fieldtype: "Link",
+				options: "Account",
+				reqd: 1,
+				default: frm.doc.payment_account,
+				get_query: () => ({
+					filters: {
+						account_type: ["in", ["Bank", "Cash"]],
+						is_group: 0,
+						company: frm.doc.company,
+					},
+				}),
+			},
+			{
+				fieldname: "posting_date",
+				label: __("Posting Date"),
+				fieldtype: "Date",
+				reqd: 1,
+				default: frappe.datetime.get_today(),
+			},
+			{
+				fieldname: "components",
+				label: __("Salary Components"),
+				fieldtype: "MultiSelectList",
+				description: __("Leave empty to pay all employer contributions of this payroll"),
+				get_data: (txt) =>
+					frappe.db.get_link_options("Salary Component", txt, {
+						type: "Employer Contribution",
+						disabled: 0,
+					}),
+			},
+			{
+				fieldname: "include_employee_share",
+				label: __("Include Employee Share"),
+				fieldtype: "Check",
+				description: __(
+					"Also pay the deductions linked as Employee Share Component of the selected components",
+				),
+			},
+		],
+		primary_action_label: __("Create Journal Entry"),
+		primary_action: (values) => {
+			frm.call({
+				doc: frm.doc,
+				method: "make_employer_contribution_payment_entry",
+				args: values,
+				freeze: true,
+				freeze_message: __("Creating Journal Entry..."),
+			}).then((r) => {
+				dialog.hide();
+				frappe.set_route("Form", "Journal Entry", r.message);
+			});
+		},
+	});
+	dialog.show();
 };
 
 let render_employee_attendance = function (frm, data) {

@@ -1279,6 +1279,192 @@ class TestPayrollEntry(HRMSTestSuite):
 		self.assertEqual(flt(je_doc.total_debit, 2), 0.01)
 		self.assertEqual(flt(je_doc.total_credit, 2), 0.01)
 
+	def get_employer_contribution_je(self, payroll_entry, liability_account):
+		return frappe.db.get_value(
+			"Journal Entry Account",
+			{"account": liability_account, "reference_name": payroll_entry.name, "docstatus": 1},
+			"parent",
+		)
+
+	@HRMSTestSuite.change_settings(
+		"Payroll Settings", {"process_payroll_accounting_entry_based_on_employee": 0}
+	)
+	def test_employer_contribution_payment_entry(self):
+		company = frappe.get_doc("Company", "_Test Company")
+		department = create_department("EC Payment Test")
+		employee = make_employee("ec_payment@payroll.com", company=company.name, department=department)
+		employer_pf, _expense_account, liability_account = self.setup_employer_contribution_component()
+
+		make_salary_structure(
+			"Test Salary Structure EC Payment",
+			"Monthly",
+			employee,
+			company=company.name,
+			currency=company.default_currency,
+			other_details={
+				"employer_contributions": [{"salary_component": employer_pf.name, "amount": 5000}]
+			},
+		)
+		dates = get_start_end_dates("Monthly", nowdate())
+		payroll_entry = make_payroll_entry(
+			start_date=dates.start_date,
+			end_date=dates.end_date,
+			payable_account=company.default_payroll_payable_account,
+			currency=company.default_currency,
+			company=company.name,
+			cost_center="Main - _TC",
+			department=department,
+		)
+		payroll_entry.reload()
+		self.assertEqual(payroll_entry.employer_contribution_status, "Pending")
+		self.assertFalse(payroll_entry.employer_contribution_payment_entry)
+
+		accrual_je = self.get_employer_contribution_je(payroll_entry, liability_account)
+		accrual_credit = frappe.db.get_value(
+			"Journal Entry Account", {"parent": accrual_je, "account": liability_account}, "credit"
+		)
+
+		bank_account = get_payment_account()
+		payment_je = frappe.get_doc(
+			"Journal Entry",
+			payroll_entry.make_employer_contribution_payment_entry(
+				bank_account=bank_account, posting_date=dates.end_date
+			),
+		)
+		# left as draft for finance to add the cheque / reference details
+		self.assertEqual(payment_je.docstatus, 0)
+		self.assertEqual(payment_je.title, "Employer Contribution Payment")
+		self.assertEqual(payment_je.voucher_type, "Cash Entry")
+		self.assertEqual(getdate(payment_je.posting_date), getdate(dates.end_date))
+
+		# payment debits knock off the accrual credits on the liability account
+		debit_row = next(d for d in payment_je.accounts if d.account == liability_account)
+		self.assertEqual(debit_row.debit, accrual_credit)
+		self.assertEqual(debit_row.debit, 5000)
+		self.assertEqual(debit_row.reference_type, "Payroll Entry")
+		self.assertEqual(debit_row.reference_name, payroll_entry.name)
+		self.assertFalse(debit_row.party)
+
+		credit_row = next(d for d in payment_je.accounts if d.account == bank_account)
+		self.assertEqual(credit_row.credit, 5000)
+
+		payroll_entry.reload()
+		self.assertEqual(payroll_entry.employer_contribution_payment_entry, payment_je.name)
+		self.assertRaisesRegex(
+			frappe.ValidationError,
+			"already paid",
+			payroll_entry.make_employer_contribution_payment_entry,
+			bank_account=bank_account,
+		)
+
+		payment_je.submit()
+		payroll_entry.reload()
+		self.assertEqual(payroll_entry.employer_contribution_status, "Paid")
+
+		payment_je.reload()
+		payment_je.cancel()
+		payroll_entry.reload()
+		self.assertEqual(payroll_entry.employer_contribution_status, "Pending")
+		self.assertFalse(payroll_entry.employer_contribution_payment_entry)
+
+	@HRMSTestSuite.change_settings(
+		"Payroll Settings", {"process_payroll_accounting_entry_based_on_employee": 1}
+	)
+	def test_employer_contribution_payment_entry_with_employee_share(self):
+		company = frappe.get_doc("Company", "_Test Company")
+		department = create_department("EC Payment Share Test")
+		emp1 = make_employee("ec_payment_share1@payroll.com", company=company.name, department=department)
+		emp2 = make_employee("ec_payment_share2@payroll.com", company=company.name, department=department)
+		employer_pf, _expense_account, liability_account = self.setup_employer_contribution_component()
+
+		# the employee's share of the same fund, held in its own deduction account
+		create_account("Employee PF Payable", "_Test Company", "Current Liabilities - _TC")
+		share_account = "Employee PF Payable - _TC"
+		employee_pf = create_salary_component("Test Employee PF", type="Deduction")
+		employee_pf.accounts = []
+		employee_pf.append("accounts", {"company": "_Test Company", "account": share_account})
+		employee_pf.save()
+		employer_pf.employee_share_component = employee_pf.name
+		employer_pf.save()
+
+		deductions = [
+			*make_deduction_salary_component(setup=True, test_tax=False, company_list=["_Test Company"]),
+			{
+				"salary_component": employee_pf.name,
+				"abbr": employee_pf.salary_component_abbr,
+				"amount": 1800,
+			},
+		]
+		structure = make_salary_structure(
+			"Test Salary Structure EC Payment Share",
+			"Monthly",
+			emp1,
+			company=company.name,
+			currency=company.default_currency,
+			deductions=deductions,
+			other_details={
+				"employer_contributions": [{"salary_component": employer_pf.name, "amount": 5000}]
+			},
+		)
+		create_salary_structure_assignment(
+			emp2, structure.name, company=company.name, currency=company.default_currency
+		)
+
+		dates = get_start_end_dates("Monthly", nowdate())
+		payroll_entry = make_payroll_entry(
+			start_date=dates.start_date,
+			end_date=dates.end_date,
+			payable_account=company.default_payroll_payable_account,
+			currency=company.default_currency,
+			company=company.name,
+			cost_center="Main - _TC",
+			department=department,
+		)
+		accrual_je = self.get_employer_contribution_je(payroll_entry, liability_account)
+
+		bank_account = get_payment_account()
+		payment_je = frappe.get_doc(
+			"Journal Entry",
+			payroll_entry.make_employer_contribution_payment_entry(
+				bank_account=bank_account, include_employee_share=1
+			),
+		)
+
+		# employee-wise debits mirror the employee-wise credits of the accrual JE
+		accrual_credits = {
+			d.party: d.credit
+			for d in frappe.get_all(
+				"Journal Entry Account",
+				{"parent": accrual_je, "account": liability_account},
+				["party", "credit"],
+			)
+		}
+		payment_debits = {d.party: d.debit for d in payment_je.accounts if d.account == liability_account}
+		self.assertEqual(accrual_credits, {emp1: 5000, emp2: 5000})
+		self.assertEqual(payment_debits, accrual_credits)
+		for d in payment_je.accounts:
+			if d.account == liability_account:
+				self.assertEqual(d.party_type, "Employee")
+
+		share_row = next(d for d in payment_je.accounts if d.account == share_account)
+		self.assertEqual(share_row.debit, 3600)
+		self.assertFalse(share_row.party)
+
+		credit_row = next(d for d in payment_je.accounts if d.account == bank_account)
+		self.assertEqual(credit_row.credit, 13600)
+
+		payment_je.submit()
+		payroll_entry.reload()
+		self.assertEqual(payroll_entry.employer_contribution_status, "Paid")
+
+		# cancelling the payroll entry reverses both journal entries and clears the payment state
+		payroll_entry.cancel()
+		self.assertEqual(frappe.db.get_value("Journal Entry", accrual_je, "docstatus"), 2)
+		self.assertEqual(frappe.db.get_value("Journal Entry", payment_je.name, "docstatus"), 2)
+		payroll_entry.reload()
+		self.assertFalse(payroll_entry.employer_contribution_status)
+		self.assertFalse(payroll_entry.employer_contribution_payment_entry)
+
 	def test_employee_benefits_accruals_in_salary_slip(self):
 		"""Test to verify
 		- employee flexible benefits of accrual payout methods are fetched into salary slip

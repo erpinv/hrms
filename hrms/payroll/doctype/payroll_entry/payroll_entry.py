@@ -132,6 +132,7 @@ class PayrollEntry(Document):
 		self.delete_linked_salary_slips()
 		self.cancel_linked_journal_entries()
 		self.cancel_linked_payment_ledger_entries()
+		self.db_set({"employer_contribution_status": None, "employer_contribution_payment_entry": None})
 
 		# reset flags & update status
 		self.db_set("salary_slips_created", 0)
@@ -737,6 +738,150 @@ class PayrollEntry(Document):
 			employee_wise_accounting_enabled=employee_wise_accounting_enabled,
 			title=_("Employer Contribution"),
 		)
+		self.db_set("employer_contribution_status", "Pending")
+
+	def get_employer_contribution_rows(self, components=None):
+		"""Employer contribution rows of this Payroll Entry's submitted slips.
+
+		Not get_sal_slip_list(): those slips are linked to the accrual JE and excluded there.
+		"""
+		return self.get_salary_detail_rows("employer_contributions", components)
+
+	def get_employee_share_rows(self, components=None):
+		"""Deduction rows carrying the employee's share of the given employer components."""
+		filters = {"type": "Employer Contribution", "employee_share_component": ["is", "set"]}
+		if components:
+			filters["name"] = ["in", list(components)]
+		share_components = frappe.get_all("Salary Component", filters, pluck="employee_share_component")
+		if not share_components:
+			return []
+		return self.get_salary_detail_rows("deductions", share_components)
+
+	def get_salary_detail_rows(self, parentfield, components=None):
+		ss = frappe.qb.DocType("Salary Slip")
+		sd = frappe.qb.DocType("Salary Detail")
+		query = (
+			frappe.qb.from_(ss)
+			.join(sd)
+			.on(ss.name == sd.parent)
+			.select(sd.salary_component, sd.amount, ss.employee)
+			.where(
+				(ss.payroll_entry == self.name)
+				& (ss.docstatus == 1)
+				& (sd.parentfield == parentfield)
+				& (sd.amount != 0)
+				& (
+					(sd.do_not_include_in_total == 0)
+					| ((sd.do_not_include_in_total == 1) & (sd.do_not_include_in_accounts == 0))
+				)
+			)
+		)
+		if components:
+			query = query.where(sd.salary_component.isin(list(components)))
+		return query.run(as_dict=True)
+
+	@frappe.whitelist(methods=["POST"])
+	def make_employer_contribution_payment_entry(
+		self, bank_account, posting_date=None, components=None, include_employee_share=False
+	):
+		"""Draft Bank/Cash Entry clearing the employer contribution liabilities (and optionally the
+		employee's share held in the deduction accounts) accrued by this Payroll Entry."""
+		self.check_permission("write")
+		if self.employer_contribution_payment_entry:
+			frappe.throw(
+				_("Employer contributions already paid via {0}").format(
+					get_link_to_form("Journal Entry", self.employer_contribution_payment_entry)
+				)
+			)
+
+		components = frappe.parse_json(components) if isinstance(components, str) else components
+		employee_wise_accounting_enabled = frappe.db.get_single_value(
+			"Payroll Settings", "process_payroll_accounting_entry_based_on_employee"
+		)
+		precision = frappe.get_precision("Journal Entry Account", "debit_in_account_currency")
+		liability_entries = self.get_employer_contribution_liabilities(
+			components, cint(include_employee_share), employee_wise_accounting_enabled, precision
+		)
+
+		accounting_dimensions = get_accounting_dimensions() or []
+		company_currency = erpnext.get_company_currency(self.company)
+		accounts = []
+		currencies = []
+		total = 0
+		for (account, employee), amount in liability_entries.items():
+			total = self.get_accounting_entries_and_payable_amount(
+				account,
+				self.cost_center,
+				amount,
+				currencies,
+				company_currency,
+				total,
+				accounting_dimensions,
+				precision,
+				entry_type="debit",
+				accounts=accounts,
+				party=employee,
+				reference_type=self.doctype,
+				reference_name=self.name,
+			)
+
+		exchange_rate, amount = self.get_amount_and_exchange_rate_for_journal_entry(
+			bank_account, total, company_currency, currencies
+		)
+		accounts.append(
+			self.update_accounting_dimensions(
+				{
+					"account": bank_account,
+					"bank_account": self.bank_account if bank_account == self.payment_account else None,
+					"credit_in_account_currency": flt(amount, precision),
+					"exchange_rate": flt(exchange_rate),
+					"cost_center": self.cost_center,
+				},
+				accounting_dimensions,
+			)
+		)
+
+		journal_entry = self.make_journal_entry(
+			accounts,
+			currencies,
+			voucher_type="Cash Entry"
+			if frappe.get_cached_value("Account", bank_account, "account_type") == "Cash"
+			else "Bank Entry",
+			user_remark=_("Employer contribution payment for salaries from {0} to {1}").format(
+				self.start_date, self.end_date
+			),
+			employee_wise_accounting_enabled=employee_wise_accounting_enabled,
+			posting_date=posting_date,
+		)
+		# Journal Entry resets the title of a new document from its first account row
+		journal_entry.db_set("title", _("Employer Contribution Payment"))
+		self.db_set("employer_contribution_payment_entry", journal_entry.name)
+		return journal_entry.name
+
+	def get_employer_contribution_liabilities(
+		self, components, include_employee_share, employee_wise_accounting_enabled, precision
+	):
+		"""Returns {(account, employee): amount} owed to the funds for this Payroll Entry."""
+		rows = self.get_employer_contribution_rows(components)
+		if not rows:
+			frappe.throw(_("No employer contributions found for the selected components"))
+
+		component_accounts = self.get_employer_contribution_accounts({r.salary_component for r in rows})
+
+		# employee-wise when the accrual JE was, so the rows knock off each other
+		liabilities = {}
+		for row in rows:
+			liability_account = component_accounts[row.salary_component][1]
+			key = (liability_account, row.employee if employee_wise_accounting_enabled else None)
+			liabilities[key] = liabilities.get(key, 0) + flt(row.amount, precision)
+
+		# the employee's share of the same funds sits in the deduction accounts
+		if include_employee_share:
+			for row in self.get_employee_share_rows(components):
+				key = (self.get_salary_component_account(row.salary_component), None)
+				liabilities[key] = liabilities.get(key, 0) + flt(row.amount, precision)
+
+		return liabilities
 
 	def get_employer_contribution_accounts(self, salary_components):
 		"""Returns {salary_component: (expense_account, liability_account)} in a single query"""
@@ -774,6 +919,7 @@ class PayrollEntry(Document):
 		submit_journal_entry=False,
 		employee_wise_accounting_enabled=False,
 		title=None,
+		posting_date=None,
 	) -> str:
 		multi_currency = 0
 		if len(currencies) > 1:
@@ -783,7 +929,7 @@ class PayrollEntry(Document):
 		journal_entry.voucher_type = voucher_type
 		journal_entry.user_remark = user_remark
 		journal_entry.company = self.company
-		journal_entry.posting_date = self.posting_date
+		journal_entry.posting_date = posting_date or self.posting_date
 		journal_entry.party_not_required = True if not employee_wise_accounting_enabled else False
 
 		journal_entry.set("accounts", accounts)
@@ -1661,6 +1807,22 @@ def get_month_details(year, month):
 		)
 	else:
 		frappe.throw(_("Fiscal Year {0} not found").format(year))
+
+
+def update_employer_contribution_payment_status(doc, method=None):
+	"""Track the employer contribution payment JE on the Payroll Entry. Called from hooks."""
+	payroll_entry = frappe.db.get_value("Payroll Entry", {"employer_contribution_payment_entry": doc.name})
+	if not payroll_entry:
+		return
+
+	if method == "on_submit":
+		frappe.db.set_value("Payroll Entry", payroll_entry, "employer_contribution_status", "Paid")
+	else:
+		frappe.db.set_value(
+			"Payroll Entry",
+			payroll_entry,
+			{"employer_contribution_status": "Pending", "employer_contribution_payment_entry": None},
+		)
 
 
 def log_payroll_failure(process, payroll_entry, error):
