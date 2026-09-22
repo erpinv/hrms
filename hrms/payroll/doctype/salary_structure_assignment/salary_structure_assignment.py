@@ -299,15 +299,21 @@ class SalaryStructureAssignment(Document):
 			for r in rows_by_type["earnings"]
 			if not r.statistical_component and r.do_not_include_in_total
 		)
-		employer_per_period = sum(
-			flt(r.default_amount)
-			for r in rows_by_type["employer_contributions"]
-			if not r.statistical_component
-		)
+		employer_per_period = 0
+		employer_per_year = 0
+		for r in rows_by_type["employer_contributions"]:
+			if r.statistical_component:
+				continue
+			# an annual employer amount is spread over the periods by the slip; count it once
+			if frappe.get_cached_value("Salary Component", r.salary_component, "is_annual_amount"):
+				employer_per_year += flt(r.default_amount)
+			else:
+				employer_per_period += flt(r.default_amount)
 
 		self.annual_gross_earning = flt(gross_per_period * periods, self.precision("annual_gross_earning"))
 		self.ctc = flt(
-			(gross_per_period + non_payable_earnings_per_period + employer_per_period) * periods,
+			(gross_per_period + non_payable_earnings_per_period + employer_per_period) * periods
+			+ employer_per_year,
 			self.precision("ctc"),
 		)
 

@@ -110,17 +110,21 @@ class TestSalaryComponent(HRMSTestSuite):
 		self.assertRaisesRegex(frappe.ValidationError, "must be a Deduction component", employer_pf.insert)
 
 		employer_pf.employee_share_component = "Test EC Pairing Employee PF"
+		employer_pf.is_annual_amount = 1
 		employer_pf.insert()
 		self.assertEqual(employer_pf.employee_share_component, "Test EC Pairing Employee PF")
+		self.assertTrue(employer_pf.is_annual_amount)
 
 		employer_pf.employee_share_component = employer_pf.name
 		self.assertRaisesRegex(frappe.ValidationError, "cannot be the component itself", employer_pf.save)
 
-		# the pairing only means something for employer contributions
+		# the pairing and the annual spread only mean something for employer contributions
 		deduction = frappe.get_doc("Salary Component", "Test EC Pairing Employee PF")
 		deduction.employee_share_component = "Test EC Pairing Employee PF"
+		deduction.is_annual_amount = 1
 		deduction.save()
 		self.assertFalse(deduction.employee_share_component)
+		self.assertFalse(deduction.is_annual_amount)
 
 
 def create_salary_component(component_name, **args):

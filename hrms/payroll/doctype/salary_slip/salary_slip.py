@@ -863,14 +863,17 @@ class SalarySlip(TransactionBase):
 		# by process_salary_structure, before totals are finalised below.
 		self.apply_regional_deductions()
 
+		# computed before the employer pass so that annual figures (annual_taxable_amount,
+		# ctc, ...) referenced by employer contribution formulas are current, not stale
+		if not skip_tax_breakup_computation:
+			self.compute_income_tax_breakup()
+
 		# shown on the slip, but never part of gross, deduction or net pay
 		if self.salary_structure:
 			self.calculate_component_amounts("employer_contributions")
 
 		self.set_precision_for_component_amounts()
 		self.set_net_pay()
-		if not skip_tax_breakup_computation:
-			self.compute_income_tax_breakup()
 
 	@hrms.allow_regional
 	def apply_regional_deductions(self):
@@ -1216,6 +1219,13 @@ class SalarySlip(TransactionBase):
 		#   - self.default_data: full-cycle values            -> the `default_amount`
 		# (proration cascades through dependent formulas, e.g. SA = BS * 0.5 inherits BS's proration).
 		amount = self.eval_condition_and_formula(struct_row, self.data)
+		is_annual_amount = component_type == "employer_contributions" and frappe.get_cached_value(
+			"Salary Component", struct_row.salary_component, "is_annual_amount"
+		)
+		if is_annual_amount and amount is not None:
+			amount = self.get_employer_contribution_for_period(struct_row, amount)
+			self.data[struct_row.abbr] = amount
+
 		if struct_row.statistical_component or struct_row.accrual_component:
 			# update statistical component amount in reference data based on payment days
 			# since row for statistical component is not added to salary slip
@@ -1266,8 +1276,9 @@ class SalarySlip(TransactionBase):
 				or (not remove_if_zero_valued and amount is not None and not self.data[struct_row.abbr])
 			):
 				# full-cycle default comes from SSA (period-independent); the slip only
-				# computes the prorated `amount` above (proration is a period concern)
-				default_amount = flt(struct_row.default_amount)
+				# computes the prorated `amount` above (proration is a period concern).
+				# An annual employer amount is spread by the slip, so its default is the period share.
+				default_amount = amount if is_annual_amount else flt(struct_row.default_amount)
 				self.update_component_row(
 					struct_row,
 					amount,
@@ -1276,6 +1287,39 @@ class SalarySlip(TransactionBase):
 					default_amount=default_amount,
 					remove_if_zero_valued=remove_if_zero_valued,
 				)
+
+	def get_employer_contribution_for_period(self, struct_row, annual_amount):
+		"""Spread an annual employer contribution over the payroll period like income tax:
+		(annual amount - contributed till date) / remaining sub-periods."""
+		if not self.payroll_period:
+			frappe.msgprint(
+				_("Start and end dates not in a valid Payroll Period, cannot calculate {0}.").format(
+					struct_row.salary_component
+				)
+			)
+			return 0.0
+
+		if not flt(self.remaining_sub_periods) > 0:
+			return 0.0
+
+		# structure rows only: one-off Additional Salary contributions are on top of the annual amount
+		contributed_till_date = self.get_salary_slip_details(
+			self.payroll_period.start_date,
+			self.start_date,
+			parentfield="employer_contributions",
+			salary_component=struct_row.salary_component,
+		) - self.get_salary_slip_details(
+			self.payroll_period.start_date,
+			self.start_date,
+			parentfield="employer_contributions",
+			salary_component=struct_row.salary_component,
+			field_to_select="additional_amount",
+		)
+
+		return flt(
+			max(0, (flt(annual_amount) - contributed_till_date) / self.remaining_sub_periods),
+			struct_row.precision,
+		)
 
 	def get_data_for_eval(self):
 		"""Returns data for evaluating formula"""

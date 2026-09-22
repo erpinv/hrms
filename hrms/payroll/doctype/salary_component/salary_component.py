@@ -77,6 +77,7 @@ class SalaryComponent(Document):
 	def validate_employer_contribution(self):
 		if self.type != "Employer Contribution":
 			self.employee_share_component = None
+			self.is_annual_amount = 0
 			return
 
 		for flag in EMPLOYER_CONTRIBUTION_CLEARED_FLAGS:

@@ -20,6 +20,7 @@
   "is_tax_applicable",
   "deduct_full_tax_on_selected_payroll_date",
   "variable_based_on_taxable_salary",
+  "is_annual_amount",
   "is_income_tax_component",
   "exempted_from_income_tax",
   "round_to_the_nearest_integer",
@@ -229,6 +230,14 @@
   },
   {
    "default": "0",
+   "depends_on": "eval:doc.type == \"Employer Contribution\"",
+   "description": "If enabled, the formula or amount gives the contribution for the whole payroll period (e.g. based on Annual Taxable Amount). Each salary slip gets (annual amount - contributed till date) / remaining payroll periods, like income tax",
+   "fieldname": "is_annual_amount",
+   "fieldtype": "Check",
+   "label": "Annual Amount, Spread Like Income Tax"
+  },
+  {
+   "default": "0",
    "depends_on": "eval:doc.type == \"Deduction\"",
    "description": "If enabled, the component will be considered in the Income Tax Deductions report",
    "fieldname": "is_income_tax_component",
@@ -304,7 +313,7 @@
  "icon": "fa fa-flag",
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-09-21 16:14:52.414804",
+ "modified": "2026-09-22 10:00:00.000000",
  "modified_by": "Administrator",
  "module": "Payroll",
  "name": "Salary Component",

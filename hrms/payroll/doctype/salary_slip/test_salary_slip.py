@@ -3538,6 +3538,82 @@ class TestSalarySlipEmployerContributions(HRMSTestSuite):
 		for additional_salary in (one_off, recurring, overwrite):
 			additional_salary.cancel()
 
+	def test_annual_employer_contribution_spread_like_income_tax(self):
+		"""An annual employer amount is spread over the payroll period like income tax:
+		(annual amount - contributed till date) / remaining sub-periods."""
+		from hrms.payroll.doctype.salary_structure.test_salary_structure import make_salary_structure
+
+		payroll_period = create_payroll_period(name="_Test Payroll Period", company="_Test Company")
+		create_tax_slab(
+			payroll_period,
+			allow_tax_exemption=True,
+			currency="INR",
+			effective_date=getdate("2019-04-01"),
+			company="_Test Company",
+		)
+		employee = make_employee(
+			"ec_annual@salary.com", company="_Test Company", date_of_joining=payroll_period.start_date
+		)
+		frappe.db.delete("Salary Slip", {"employee": employee})
+
+		if frappe.db.exists("Salary Component", "Test Slip Employer Annual"):
+			frappe.delete_doc("Salary Component", "Test Slip Employer Annual", force=True)
+		frappe.get_doc(
+			{
+				"doctype": "Salary Component",
+				"salary_component": "Test Slip Employer Annual",
+				"salary_component_abbr": "TSEA",
+				"type": "Employer Contribution",
+				"is_annual_amount": 1,
+			}
+		).insert()
+
+		structure = make_salary_structure(
+			"Salary Structure EC Annual",
+			"Monthly",
+			employee=employee,
+			company="_Test Company",
+			currency="INR",
+			payroll_period=payroll_period,
+			test_tax=True,
+			other_details={
+				"employer_contributions": [
+					{
+						"salary_component": "Test Slip Employer Annual",
+						"abbr": "TSEA",
+						"amount_based_on_formula": 1,
+						"formula": "annual_taxable_amount * 0.02",
+					}
+				]
+			},
+		)
+
+		# first period: the whole annual amount is still to be spread
+		first = make_salary_slip(structure.name, employee=employee, posting_date=payroll_period.start_date)
+		first.insert()
+		first.submit()
+
+		self.assertEqual(first.remaining_sub_periods, 12)
+		self.assertGreater(first.annual_taxable_amount, 0)
+		annual = flt(first.annual_taxable_amount * 0.02, 2)
+		first_row = next(d for d in first.employer_contributions if d.abbr == "TSEA")
+		self.assertEqual(first_row.amount, flt(annual / 12, 2))
+		self.assertEqual(first_row.default_amount, first_row.amount)
+
+		# second period: what the first slip contributed is netted off and the rest spread over 11
+		second = make_salary_slip(
+			structure.name, employee=employee, posting_date=add_months(payroll_period.start_date, 1)
+		)
+		self.assertEqual(second.remaining_sub_periods, 11)
+		annual = flt(second.annual_taxable_amount * 0.02, 2)
+		second_row = next(d for d in second.employer_contributions if d.abbr == "TSEA")
+		self.assertEqual(second_row.amount, flt((annual - first_row.amount) / 11, 2))
+
+		# per-period employer formulas are untouched by the spread
+		for slip in (first, second):
+			self.assertNotIn("TSEA", [d.abbr for d in slip.earnings + slip.deductions])
+			self.assertEqual(flt(slip.net_pay, 2), flt(slip.gross_pay - slip.total_deduction, 2))
+
 	def test_employer_contributions_not_printed(self):
 		"""Employer cost stays on the record, not on the employee's payslip."""
 		slip = self.make_slip("Salary Structure EC Print", "ec_print@salary.com")
