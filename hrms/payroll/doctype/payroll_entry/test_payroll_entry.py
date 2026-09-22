@@ -1135,11 +1135,22 @@ class TestPayrollEntry(HRMSTestSuite):
 			{"account": liability_account, "reference_name": payroll_entry.name, "docstatus": 1},
 			"parent",
 		)
-		self.assertTrue(employer_contribution_je, "Employer contribution Journal Entry not created")
+		self.assertTrue(employer_contribution_je, "Employer contribution rows not posted")
+
+		# employer contributions are posted in the salary accrual JV itself, not in a second JV
+		salary_slip = frappe.get_doc("Salary Slip", {"payroll_entry": payroll_entry.name})
+		self.assertEqual(salary_slip.journal_entry, employer_contribution_je)
+		self.assertEqual(
+			frappe.db.count(
+				"Journal Entry Account",
+				{"reference_type": "Payroll Entry", "reference_name": payroll_entry.name, "docstatus": 1},
+			),
+			2,  # payroll payable + employer liability, both in the one JV
+		)
 
 		je_doc = frappe.get_doc("Journal Entry", employer_contribution_je)
-		self.assertEqual(je_doc.total_debit, 6200)
-		self.assertEqual(je_doc.total_credit, 6200)
+		self.assertEqual(je_doc.total_debit, je_doc.total_credit)
+		self.assertEqual(je_doc.total_debit, salary_slip.gross_pay + 6200)
 
 		debit_row = next(d for d in je_doc.accounts if d.account == expense_account)
 		self.assertEqual(debit_row.debit, 6200)
@@ -1149,17 +1160,11 @@ class TestPayrollEntry(HRMSTestSuite):
 		self.assertEqual(credit_row.reference_type, "Payroll Entry")
 		self.assertFalse(credit_row.party)
 
-		# employer contribution accounts should not leak into the salary accrual JV
-		salary_slip = frappe.get_doc("Salary Slip", {"payroll_entry": payroll_entry.name})
-		self.assertNotEqual(salary_slip.journal_entry, employer_contribution_je)
+		# employer cost never touches the payroll payable
+		payable_row = next(d for d in je_doc.accounts if d.account == company.default_payroll_payable_account)
+		self.assertEqual(payable_row.credit, salary_slip.net_pay)
 
-		accrual_accounts = [
-			d.account for d in frappe.get_doc("Journal Entry", salary_slip.journal_entry).accounts
-		]
-		self.assertNotIn(expense_account, accrual_accounts)
-		self.assertNotIn(liability_account, accrual_accounts)
-
-		# cancelling the payroll entry should cancel the employer contribution JV
+		# cancelling the payroll entry should cancel the JV
 		payroll_entry.reload()
 		payroll_entry.cancel()
 		self.assertEqual(frappe.db.get_value("Journal Entry", employer_contribution_je, "docstatus"), 2)
@@ -1219,12 +1224,16 @@ class TestPayrollEntry(HRMSTestSuite):
 			self.assertEqual(row.credit_in_account_currency, 5000)
 
 		je_doc = frappe.get_doc("Journal Entry", credit_rows[0].parent)
-		self.assertEqual(je_doc.total_debit, 10000)
-		self.assertEqual(je_doc.total_credit, 10000)
+		self.assertEqual(je_doc.total_debit, je_doc.total_credit)
+		self.assertEqual({row.parent for row in credit_rows}, {je_doc.name})
 
 		debit_row = next(d for d in je_doc.accounts if d.account == expense_account)
 		self.assertEqual(debit_row.debit, 10000)
 		self.assertFalse(debit_row.party)
+
+		# same JV as the salary accrual, whose payable rows are also employee-wise
+		slips = frappe.get_all("Salary Slip", {"payroll_entry": payroll_entry.name}, ["journal_entry"])
+		self.assertEqual({d.journal_entry for d in slips}, {je_doc.name})
 
 	def test_employer_contribution_jv_balances_with_cost_center_split_rounding(self):
 		company = frappe.get_doc("Company", "_Test Company")
@@ -1273,11 +1282,15 @@ class TestPayrollEntry(HRMSTestSuite):
 			{"account": liability_account, "reference_name": payroll_entry.name, "docstatus": 1},
 			"parent",
 		)
-		self.assertTrue(employer_contribution_je, "Employer contribution Journal Entry not created")
+		self.assertTrue(employer_contribution_je, "Employer contribution rows not posted")
 
 		je_doc = frappe.get_doc("Journal Entry", employer_contribution_je)
-		self.assertEqual(flt(je_doc.total_debit, 2), 0.01)
-		self.assertEqual(flt(je_doc.total_credit, 2), 0.01)
+		self.assertEqual(flt(je_doc.total_debit, 2), flt(je_doc.total_credit, 2))
+		expense_debits = [flt(d.debit, 2) for d in je_doc.accounts if d.account == expense_account]
+		self.assertEqual(flt(sum(expense_debits), 2), 0.01)
+		self.assertEqual(
+			flt(sum(d.credit for d in je_doc.accounts if d.account == liability_account), 2), 0.01
+		)
 
 	def get_employer_contribution_je(self, payroll_entry, liability_account):
 		return frappe.db.get_value(

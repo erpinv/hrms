@@ -590,49 +590,63 @@ class PayrollEntry(Document):
 			or {}
 		)
 
-		# fetched before the accrual JE gets linked to slips as get_sal_slip_list excludes linked slips
 		employer_contributions = self.get_salary_components("employer_contributions") or []
 
 		precision = frappe.get_precision("Journal Entry Account", "debit_in_account_currency")
 
-		if earnings or deductions:
+		if earnings or deductions or employer_contributions:
 			accounts = []
 			currencies = []
 			payable_amount = 0
 			accounting_dimensions = get_accounting_dimensions() or []
 			company_currency = erpnext.get_company_currency(self.company)
 
-			payable_amount = self.get_payable_amount_for_earnings_and_deductions(
+			if earnings or deductions:
+				payable_amount = self.get_payable_amount_for_earnings_and_deductions(
+					accounts,
+					earnings,
+					deductions,
+					currencies,
+					company_currency,
+					accounting_dimensions,
+					precision,
+					payable_amount,
+					employee_wise_accounting_enabled,
+				)
+
+				payable_amount = self.set_accounting_entries_for_advance_deductions(
+					accounts,
+					currencies,
+					company_currency,
+					accounting_dimensions,
+					precision,
+					payable_amount,
+				)
+
+				self.set_payable_amount_against_payroll_payable_account(
+					accounts,
+					currencies,
+					company_currency,
+					accounting_dimensions,
+					precision,
+					payable_amount,
+					self.payroll_payable_account,
+					employee_wise_accounting_enabled,
+				)
+
+			# employer contributions (Dr expense / Cr liability) go into the same Journal Entry
+			has_employer_contributions = self.set_accounting_entries_for_employer_contributions(
+				employer_contributions,
 				accounts,
-				earnings,
-				deductions,
 				currencies,
 				company_currency,
 				accounting_dimensions,
 				precision,
-				payable_amount,
 				employee_wise_accounting_enabled,
 			)
 
-			payable_amount = self.set_accounting_entries_for_advance_deductions(
-				accounts,
-				currencies,
-				company_currency,
-				accounting_dimensions,
-				precision,
-				payable_amount,
-			)
-
-			self.set_payable_amount_against_payroll_payable_account(
-				accounts,
-				currencies,
-				company_currency,
-				accounting_dimensions,
-				precision,
-				payable_amount,
-				self.payroll_payable_account,
-				employee_wise_accounting_enabled,
-			)
+			if not accounts:
+				return
 
 			# when party is not required, skip the validation in journal & gl entry
 			self.make_journal_entry(
@@ -648,19 +662,28 @@ class PayrollEntry(Document):
 				employee_wise_accounting_enabled=employee_wise_accounting_enabled,
 			)
 
-		self.make_employer_contribution_jv_entry(employer_contributions, employee_wise_accounting_enabled)
+			if has_employer_contributions:
+				self.db_set("employer_contribution_status", "Pending")
 
-	def make_employer_contribution_jv_entry(
-		self, employer_contributions, employee_wise_accounting_enabled=False
-	):
+	def set_accounting_entries_for_employer_contributions(
+		self,
+		employer_contributions,
+		accounts,
+		currencies,
+		company_currency,
+		accounting_dimensions,
+		precision,
+		employee_wise_accounting_enabled=False,
+	) -> bool:
+		"""Appends Dr expense (per cost centre) / Cr liability rows for the employer
+		contributions to ``accounts``. Returns whether any row was added."""
 		if not employer_contributions:
-			return
+			return False
 
 		component_accounts = self.get_employer_contribution_accounts(
 			{item.salary_component for item in employer_contributions}
 		)
 
-		precision = frappe.get_precision("Journal Entry Account", "debit_in_account_currency")
 		expense_entries = {}
 		liability_entries = {}
 		for item in employer_contributions:
@@ -690,11 +713,7 @@ class PayrollEntry(Document):
 			liability_entries[liability_key] = liability_entries.get(liability_key, 0) + item_amount
 
 		if not any(expense_entries.values()):
-			return
-		accounting_dimensions = get_accounting_dimensions() or []
-		company_currency = erpnext.get_company_currency(self.company)
-		accounts = []
-		currencies = []
+			return False
 
 		for (account, cost_center), amount in expense_entries.items():
 			self.get_accounting_entries_and_payable_amount(
@@ -727,18 +746,7 @@ class PayrollEntry(Document):
 				reference_name=self.name,
 			)
 
-		self.make_journal_entry(
-			accounts,
-			currencies,
-			voucher_type="Journal Entry",
-			user_remark=_("Employer contribution accrual for salaries from {0} to {1}").format(
-				self.start_date, self.end_date
-			),
-			submit_journal_entry=True,
-			employee_wise_accounting_enabled=employee_wise_accounting_enabled,
-			title=_("Employer Contribution"),
-		)
-		self.db_set("employer_contribution_status", "Pending")
+		return True
 
 	def get_employer_contribution_rows(self, components=None):
 		"""Employer contribution rows of this Payroll Entry's submitted slips.
