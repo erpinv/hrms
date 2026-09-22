@@ -3614,6 +3614,104 @@ class TestSalarySlipEmployerContributions(HRMSTestSuite):
 			self.assertNotIn("TSEA", [d.abbr for d in slip.earnings + slip.deductions])
 			self.assertEqual(flt(slip.net_pay, 2), flt(slip.gross_pay - slip.total_deduction, 2))
 
+	def test_annual_employer_contribution_uses_tax_base_of_either_slab_style(self):
+		"""A 0% slab row exempts income inside the slab, a standard exemption takes it off
+		the earning; an employer contribution on the taxed portion must not care which."""
+		from hrms.payroll.doctype.salary_structure.test_salary_structure import make_salary_structure
+
+		payroll_period = create_payroll_period(name="_Test Payroll Period", company="_Test Company")
+		employee = make_employee(
+			"ec_slab_style@salary.com", company="_Test Company", date_of_joining=payroll_period.start_date
+		)
+
+		if frappe.db.exists("Salary Component", "Test Slip Employer Slab"):
+			frappe.delete_doc("Salary Component", "Test Slip Employer Slab", force=True)
+		frappe.get_doc(
+			{
+				"doctype": "Salary Component",
+				"salary_component": "Test Slip Employer Slab",
+				"salary_component_abbr": "TSES",
+				"type": "Employer Contribution",
+				"is_annual_amount": 1,
+			}
+		).insert()
+
+		# no exempted_from_income_tax deductions here: allow_tax_exemption would switch those
+		# on too, and the slab must be the only difference between the two runs
+		earnings = [
+			{
+				"salary_component": "Basic Salary",
+				"abbr": "BS",
+				"formula": "base",
+				"type": "Earning",
+				"amount_based_on_formula": 1,
+			}
+		]
+		deductions = [{"salary_component": "TDS", "abbr": "T", "type": "Deduction"}]
+		make_salary_component(earnings + deductions, test_tax=True, company_list=["_Test Company"])
+
+		structure = make_salary_structure(
+			"Salary Structure EC Slab Style",
+			"Monthly",
+			employee=employee,
+			company="_Test Company",
+			currency="INR",
+			payroll_period=payroll_period,
+			earnings=earnings,
+			deductions=deductions,
+			other_details={
+				"employer_contributions": [
+					{
+						"salary_component": "Test Slip Employer Slab",
+						"abbr": "TSES",
+						"amount_based_on_formula": 1,
+						"formula": "annual_taxable_amount_after_exemption * 0.02",
+					}
+				]
+			},
+		)
+
+		slab = frappe.get_doc(
+			"Income Tax Slab", frappe.db.get_value("Income Tax Slab", {"currency": "INR", "docstatus": 1})
+		)
+		exempt_upto = 100000
+
+		def amounts():
+			frappe.clear_cache()
+			slip = make_salary_slip(structure.name, employee=employee, posting_date=payroll_period.start_date)
+			return (
+				slip.annual_taxable_amount,
+				slip.annual_taxable_amount_after_exemption,
+				next(d.amount for d in slip.employer_contributions if d.abbr == "TSES"),
+			)
+
+		# a) exemption taken off the earning
+		slab.allow_tax_exemption = 1
+		slab.standard_tax_exemption_amount = exempt_upto
+		slab.slabs = []
+		slab.append("slabs", {"from_amount": 0, "percent_deduction": 10})
+		slab.flags.ignore_validate_update_after_submit = True
+		slab.save()
+		taxable_a, base_a, employer_a = amounts()
+		self.assertEqual(base_a, taxable_a)
+
+		# b) same exemption expressed as a zero-rate slab row
+		slab.allow_tax_exemption = 0
+		slab.standard_tax_exemption_amount = 0
+		slab.slabs = []
+		slab.append("slabs", {"from_amount": 0, "to_amount": exempt_upto, "percent_deduction": 0})
+		slab.append("slabs", {"from_amount": exempt_upto + 1, "percent_deduction": 10})
+		slab.flags.ignore_validate_update_after_submit = True
+		slab.save()
+		taxable_b, base_b, employer_b = amounts()
+
+		# the exemption never reaches annual_taxable_amount in (b) ...
+		self.assertEqual(taxable_b, taxable_a + exempt_upto)
+		# ... but the taxed base, and so the employer contribution, are the same
+		self.assertEqual(base_b, base_a)
+		self.assertEqual(employer_b, employer_a)
+		self.assertEqual(employer_a, flt(base_a * 0.02 / 12, 2))
+
 	def test_employer_contributions_not_printed(self):
 		"""Employer cost stays on the record, not on the employee's payslip."""
 		slip = self.make_slip("Salary Structure EC Print", "ec_print@salary.com")

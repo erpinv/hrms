@@ -40,7 +40,10 @@ from hrms.payroll.doctype.employee_benefit_ledger.employee_benefit_ledger import
 	create_employee_benefit_ledger_entry,
 	delete_employee_benefit_ledger_entry,
 )
-from hrms.payroll.doctype.income_tax_slab.income_tax_slab import calculate_tax_by_tax_slab
+from hrms.payroll.doctype.income_tax_slab.income_tax_slab import (
+	calculate_tax_by_tax_slab,
+	get_exempt_amount_from_tax_slabs,
+)
 from hrms.payroll.doctype.payroll_entry.payroll_entry import get_salary_withholdings, get_start_end_dates
 from hrms.payroll.doctype.payroll_period.payroll_period import (
 	get_payroll_period,
@@ -1003,6 +1006,7 @@ class SalarySlip(TransactionBase):
 			+ self.tax_exemption_declaration
 			+ self.standard_tax_exemption_amount
 		)
+		self.set_annual_taxable_amount_after_exemption()
 
 		self.income_tax_deducted_till_date = self.get_income_tax_deducted_till_date()
 
@@ -1019,6 +1023,25 @@ class SalarySlip(TransactionBase):
 			# while calculating income_tax_deducted_till_date
 
 			self.total_income_tax = self.income_tax_deducted_till_date + self.future_income_tax_deductions
+
+	def set_annual_taxable_amount_after_exemption(self):
+		"""Annual amount income tax is actually charged on.
+
+		`annual_taxable_amount` is net of the exemptions taken off the earning
+		(standard exemption, declarations, ...), but a slab can also exempt income
+		with a 0% row, which is applied inside the slab. Formulas that need the taxed
+		portion -- an employer contribution levied on the same base as the tax, say --
+		read this instead, so they give the same result whichever way the exemption
+		is configured.
+		"""
+		exempt_amount = 0
+		if hasattr(self, "tax_slab"):
+			eval_locals, __ = self.get_data_for_eval()
+			exempt_amount = get_exempt_amount_from_tax_slabs(
+				self.annual_taxable_amount, self.tax_slab, self.whitelisted_globals, eval_locals
+			)
+
+		self.annual_taxable_amount_after_exemption = max(0, self.annual_taxable_amount - exempt_amount)
 
 	def compute_ctc(self):
 		if hasattr(self, "previous_taxable_earnings"):

@@ -92,6 +92,7 @@
   "tax_exemption_declaration",
   "deductions_before_tax_calculation",
   "annual_taxable_amount",
+  "annual_taxable_amount_after_exemption",
   "column_break_35wb",
   "income_tax_deducted_till_date",
   "current_month_income_tax",
@@ -647,6 +648,14 @@
    "read_only": 1
   },
   {
+   "description": "Annual Taxable Amount less the income exempted by zero-rate rows of the Income Tax Slab, i.e. the amount income tax is actually charged on",
+   "fieldname": "annual_taxable_amount_after_exemption",
+   "fieldtype": "Currency",
+   "label": "Annual Taxable Amount After Exemption",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
    "fieldname": "income_tax_deducted_till_date",
    "fieldtype": "Currency",
    "label": "Income Tax Deducted Till Date",
@@ -778,7 +787,7 @@
  "idx": 9,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-09-21 16:56:06.338105",
+ "modified": "2026-09-22 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Payroll",
  "name": "Salary Slip",

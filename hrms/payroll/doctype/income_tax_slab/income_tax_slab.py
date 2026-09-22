@@ -61,6 +61,37 @@ def calculate_base_tax_from_tax_slabs(annual_taxable_earning, tax_slab, eval_glo
 	return tax_amount
 
 
+def get_exempt_amount_from_tax_slabs(annual_taxable_earning, tax_slab, eval_globals=None, eval_locals=None):
+	"""Portion of the annual taxable earning that falls in zero-rate slab rows.
+
+	A 0% row works like an exemption, but it is applied here inside the slab instead of
+	being taken off the earning, so it never reaches the salary slip's
+	`annual_taxable_amount`. Components that need the amount income tax is actually
+	charged on (e.g. an employer contribution on the taxed portion) subtract this.
+	"""
+	eval_globals = eval_globals or {}
+	eval_locals = eval_locals or {}
+	eval_locals.update({"annual_taxable_earning": annual_taxable_earning})
+
+	exempt_amount = 0
+	for slab in tax_slab.slabs:
+		if flt(slab.percent_deduction):
+			continue
+
+		cond = cstr(slab.condition).strip()
+		if cond and not eval_tax_slab_condition(cond, eval_globals, eval_locals):
+			continue
+
+		if annual_taxable_earning <= flt(slab.from_amount):
+			continue
+
+		# an open-ended row exempts everything above its start
+		upper_limit = min(annual_taxable_earning, flt(slab.to_amount) or annual_taxable_earning)
+		exempt_amount += upper_limit - flt(slab.from_amount)
+
+	return exempt_amount
+
+
 def calculate_other_charges(tax_amount, annual_taxable_earning, tax_slab):
 	total_other_taxes_and_charges = 0
 	for d in tax_slab.other_taxes_and_charges:
